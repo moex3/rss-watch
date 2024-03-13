@@ -225,6 +225,7 @@ sub handle_feed {
         # This is most likely the first run, do not run all of the backlog
         # only the items after this one
         $LATEST{$fname} = $lastid;
+        save_latest($fname);
         return 1;
     }
     if (defined($LATEST{$fname}) and not $last_hit) {
