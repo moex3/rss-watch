@@ -159,6 +159,12 @@ sub parse_config {
     close($fh);
 }
 
+sub sh_escape {
+    my ($txt) = @_;
+    $txt =~ s/'/'\\''/;
+    return $txt;
+}
+
 sub exec_script {
     my ($feed, $xmlitem) = @_;
 
@@ -171,7 +177,8 @@ sub exec_script {
             my $key = $1;
             #print("Matched: $key\n");
             next if not exists $xmlitem->{$key};
-            $cmd =~ s/\$$key/$xmlitem->{$key}/;
+            my $escaped_val = sh_escape($xmlitem->{$key});
+            $cmd =~ s/\$$key/$escaped_val/;
         }
 
         qx($cmd);
