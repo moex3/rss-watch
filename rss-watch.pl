@@ -12,6 +12,7 @@ my $CONFIG_FILE = "$ENV{HOME}/.config/rss-watch/config";
 my $LATEST_DIR = "$ENV{HOME}/.local/share/rss-watch/latest";
 my %LATEST;
 my %CONFIG;
+my $OPT_IGNORE_LAST = 0;
 my $XPARSER = XML::Parser->new(Style => 'Tree');
 
 sub item2hash {
@@ -19,14 +20,23 @@ sub item2hash {
     my %ret = ();
 
     for (my $i = 1; $i < scalar @$xml; $i+=2) {
-        #if (ref($xml->[$i]) eq "ST
         my $key = $xml->[$i];
         next if $key eq 0;
+        # index 0 is the attributes, or empty
+        # index 1 is text value or empty
+        my @val_arr;
+        #print("Key: $key\n");
         my $val = $xml->[$i+1];
-        next if $val->[1] != 0; # only store string values here
-        $ret{$key} = $val->[2];
+        # Copy the attributes
+        push(@val_arr, $val->[0]);
+        if (scalar @$val >= 3 && $val->[1] == 0) {
+            # Type is a string, copy that as well
+            push(@val_arr, $val->[2]);
+        }
+        $ret{$key} = \@val_arr;
     }
 
+    #print(Dumper(\%ret));
     return \%ret;
 }
 
@@ -173,12 +183,36 @@ sub exec_script {
     foreach my $cmdRef (@$cmdArr) {
         my $cmd = $cmdRef; # Copy it
 
-        while ($cmd =~ /[^\\]\$([\w:]+)/g) {
-            my $key = $1;
-            #print("Matched: $key\n");
-            next if not exists $xmlitem->{$key};
-            my $escaped_val = sh_escape($xmlitem->{$key});
-            $cmd =~ s/\$$key/$escaped_val/;
+        while ($cmd =~ /[^\\]\$([\w:<>]+)/g) {
+            my $fullmatch = $1;
+            my $key;
+            my $attr;
+            if ($fullmatch =~ /^(.*?)<(.*?)>/) {
+                # If key specifies an attribute
+                $key = $1;
+                $attr = $2;
+            } else {
+                $key = $1;
+            }
+            #print("Matched: $key with attr: $attr\n");
+            if (not exists $xmlitem->{$key}) {
+                print("No xml entry with key: '$key' found. Skipping\n");
+                next;
+            }
+            my $val;
+            if ($attr) {
+                # We want the attribue's value, not the contents of the tag
+                if (not exists $xmlitem->{$key}[0]->{$attr}) {
+                    print("No xml attribute entry with key: '$key' and attr: '$attr' found. Skipping\n");
+                    next;
+                }
+                $val = $xmlitem->{$key}[0]->{$attr};
+            } else {
+                $val = $xmlitem->{$key}[1];
+            }
+            #print("Using: $val\n");
+            my $escaped_val = sh_escape($val);
+            $cmd =~ s/\$$fullmatch/$escaped_val/;
         }
 
         qx($cmd);
@@ -207,7 +241,7 @@ sub handle_feed {
     foreach (@$items) {
         my $item_hash = item2hash($_);
 
-        if (defined($LATEST{$fname}) and $LATEST{$fname} eq $item_hash->{guid}) {
+        if ($OPT_IGNORE_LAST == 0 && defined($LATEST{$fname}) and $LATEST{$fname} eq $item_hash->{guid}[1]) {
             # Stop if we reached the last handled item
             # or if there is no 'last' defined
             $last_hit = 1;
@@ -215,7 +249,7 @@ sub handle_feed {
         }
         push(@item_hashes, $item_hash);
     }
-    my $lastid = $item_hashes[0]->{guid};
+    my $lastid = $item_hashes[0]->{guid}[1];
     #print(Dumper(\@item_hashes));
     if (not defined($lastid)) {
         if ($last_hit) {
@@ -228,7 +262,7 @@ sub handle_feed {
         }
     }
 
-    if (not defined($LATEST{$fname})) {
+    if ($OPT_IGNORE_LAST == 0 && not defined($LATEST{$fname})) {
         # This is most likely the first run, do not run all of the backlog
         # only the items after this one
         $LATEST{$fname} = $lastid;
@@ -247,7 +281,9 @@ sub handle_feed {
         exec_script($feed, $_);
     }
 
-    save_latest($fname);
+    if ($OPT_IGNORE_LAST == 0) {
+        save_latest($fname);
+    }
 
     return 1;
 }
@@ -260,17 +296,24 @@ if (! -f $CONFIG_FILE) {
     exit 1;
 }
 
+# Undocumented debug option
+$OPT_IGNORE_LAST = scalar @ARGV >= 1 && $ARGV[0] eq "-d";
+
 parse_config();
 #print(Dumper(\%CONFIG));
 #exit;
 parse_latest();
 
 my $ua = LWP::UserAgent->new();
+$ua->agent('RssWatch');
 #print(Dumper(\%CONFIG));
 foreach (@{$CONFIG{feeds}}) {
     my $item = $_;
     my $resp = $ua->get($item->{url});
-    next if not $resp->is_success;
+    if (not $resp->is_success) {
+        print("Failed to GET url: '$item->{url}' status: ", $resp->status_line, "\n");
+        next;
+    }
 
     my $fret = handle_feed($resp->decoded_content, $item);
     if (not $fret) {
