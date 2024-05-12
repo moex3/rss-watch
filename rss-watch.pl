@@ -7,6 +7,7 @@ use File::Basename;
 use File::Path qw(make_path);
 use LWP::UserAgent;
 use XML::Parser;
+use Date::Parse;
 
 my $CONFIG_FILE = "$ENV{HOME}/.config/rss-watch/config";
 my $LATEST_DIR = "$ENV{HOME}/.local/share/rss-watch/latest";
@@ -241,7 +242,7 @@ sub handle_feed {
     foreach (@$items) {
         my $item_hash = item2hash($_);
 
-        if ($OPT_IGNORE_LAST == 0 && defined($LATEST{$fname}) and $LATEST{$fname} eq $item_hash->{guid}[1]) {
+        if ($OPT_IGNORE_LAST == 0 and defined($LATEST{$fname}) and str2time($item_hash->{pubDate}[1]) <= $LATEST{$fname} ) {
             # Stop if we reached the last handled item
             # or if there is no 'last' defined
             $last_hit = 1;
@@ -249,7 +250,7 @@ sub handle_feed {
         }
         push(@item_hashes, $item_hash);
     }
-    my $lastid = $item_hashes[0]->{guid}[1];
+    my $lastid = str2time($item_hashes[0]->{pubDate}[1]);
     #print(Dumper(\@item_hashes));
     if (not defined($lastid)) {
         if ($last_hit) {
