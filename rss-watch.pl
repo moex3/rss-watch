@@ -172,7 +172,7 @@ sub parse_config {
 
 sub sh_escape {
     my ($txt) = @_;
-    $txt =~ s/'/'\\''/;
+    $txt =~ s!'!'\\''!;
     return $txt;
 }
 
@@ -183,6 +183,7 @@ sub exec_script {
     #print(Dumper($xmlitem));
     foreach my $cmdRef (@$cmdArr) {
         my $cmd = $cmdRef; # Copy it
+        #print("Orig cmd: ($cmd)\n");
 
         while ($cmd =~ /[^\\]\$([\w:<>]+)/g) {
             my $fullmatch = $1;
@@ -216,6 +217,7 @@ sub exec_script {
             $cmd =~ s/\$$fullmatch/$escaped_val/;
         }
 
+        #print("Executing: ($cmd)\n");
         qx($cmd);
     }
 }
@@ -236,21 +238,44 @@ sub handle_feed {
     return undef if (scalar @$items == 0);
     #print(Dumper($items));
 
+    my $lastElemName = 'pubDate';
+    if (exists($feed->{lastElemName})) {
+        $lastElemName = $feed->{lastElemName};
+    }
+    #print("Last elem name is: '$lastElemName'\n");
+
     my $last_hit = 0;
     # Convert xml items into perl hashes
     my @item_hashes = ();
     foreach (@$items) {
         my $item_hash = item2hash($_);
 
-        if ($OPT_IGNORE_LAST == 0 and defined($LATEST{$fname}) and str2time($item_hash->{pubDate}[1]) <= $LATEST{$fname} ) {
-            # Stop if we reached the last handled item
-            # or if there is no 'last' defined
-            $last_hit = 1;
-            last;
+        if ($OPT_IGNORE_LAST == 0 and defined($LATEST{$fname})) {
+            #print("Last elem type is: '$feed->{lastElemType}'\n");
+            if (not exists($feed->{lastElemType}) or $feed->{lastElemType} eq 'timestring') {
+                if (str2time($item_hash->{$lastElemName}[1]) <= $LATEST{$fname}) {
+                    # Stop if we reached the last handled item
+                    # or if there is no 'last' defined
+                    $last_hit = 1;
+                    last;
+                }
+            } elsif ($feed->{lastElemType} eq 'timeint') {
+                if ($item_hash->{$lastElemName}[1] <= $LATEST{$fname}) {
+                    # Stop if we reached the last handled item
+                    # or if there is no 'last' defined
+                    $last_hit = 1;
+                    last;
+                }
+            }
         }
         push(@item_hashes, $item_hash);
     }
-    my $lastid = str2time($item_hashes[0]->{pubDate}[1]);
+    my $lastid;
+    if (not exists($feed->{lastElemType}) or $feed->{lastElemType} eq 'timestring') {
+        $lastid = str2time($item_hashes[0]->{$lastElemName}[1]);
+    } else {
+        $lastid = $item_hashes[0]->{$lastElemName}[1];
+    }
     #print(Dumper(\@item_hashes));
     if (not defined($lastid)) {
         if ($last_hit) {
